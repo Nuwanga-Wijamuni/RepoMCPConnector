@@ -1,0 +1,18 @@
+#(Phase 1) Core FastAPI & Git
+
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+gitpython
+python-dotenv
+
+#(Phase 3) Async Tasks & Sandboxing
+
+celery
+redis
+docker
+
+#(Phase 4) Deployment
+
+gunicorn
