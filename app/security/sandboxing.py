@@ -1,5 +1,6 @@
 import os
 import logging
+import shlex  # <--- CRITICAL SECURITY IMPORT
 
 # We wrap the import in a try/except block so the server 
 # doesn't crash immediately if docker is not installed (Phase 1/2 usage).
@@ -46,6 +47,11 @@ def run_sandboxed_bisect(repo_path: str, test_command: str, bad_commit: str, goo
     # Using a lightweight image that has git installed.
     image_name = "bitnami/git:latest" 
     
+    # --- SECURITY FIX ---
+    # We strictly quote the user-provided command to prevent shell injection.
+    # This prevents a command like "; rm -rf /" from running.
+    safe_test_command = shlex.quote(test_command)
+    
     # 2. Prepare the script to run INSIDE the container.
     # We use an f-string to inject the commit hashes and test command.
     bisect_script = f"""
@@ -60,8 +66,8 @@ def run_sandboxed_bisect(repo_path: str, test_command: str, bad_commit: str, goo
     git bisect bad {bad_commit}
     git bisect good {good_commit}
     
-    # Run the automated bisect
-    git bisect run {test_command}
+    # Run the automated bisect using the SAFE, QUOTED command
+    git bisect run /bin/sh -c {safe_test_command}
     """
     
     container = None
@@ -78,7 +84,9 @@ def run_sandboxed_bisect(repo_path: str, test_command: str, bad_commit: str, goo
         
         container = client.containers.run(
             image_name,
-            command=f"/bin/sh -c '{bisect_script}'",
+            # We wrap the entire script in single quotes for the outer shell
+            # This is the second layer of security.
+            command=f"/bin/sh -c {shlex.quote(bisect_script)}",
             volumes={repo_path: {'bind': '/app', 'mode': 'rw'}}, 
             working_dir="/app",
             detach=True, 
