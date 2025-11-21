@@ -1,8 +1,9 @@
-from git import Repo, GitCommandError, Object, NULL_TREE # <--- Added NULL_TREE
-from ..schemas import CommitInfo, TreeItem, DiffStats
+from git import Repo, GitCommandError, Object, NULL_TREE 
+from ..schemas import CommitInfo, TreeItem, DiffStats, RepoMapItem
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 import os
+import re
 
 def get_history_for_file(repo_path: str, file_path: str) -> list[CommitInfo]:
     """
@@ -31,9 +32,16 @@ def get_history_for_file(repo_path: str, file_path: str) -> list[CommitInfo]:
         print(f"An unexpected error occurred: {e}")
         return []
 
-def get_file_content_at_commit(repo_path: str, file_path: str, commit_hash: Optional[str] = None) -> Optional[dict]:
+def get_file_content_at_commit(
+    repo_path: str, 
+    file_path: str, 
+    commit_hash: Optional[str] = None,
+    start_line: Optional[int] = None,
+    end_line: Optional[int] = None
+) -> Optional[dict]:
     """
     Uses GitPython to get the content of a file at a specific commit.
+    Supports slicing content by line numbers.
     """
     try:
         repo = Repo(repo_path)
@@ -46,12 +54,28 @@ def get_file_content_at_commit(repo_path: str, file_path: str, commit_hash: Opti
         blob = commit.tree / file_path
         content_data = blob.data_stream.read()
         
+        # Decode content
+        decoded_content = content_data.decode('utf-8')
+        
+        # Handle Context Trimming (Line Slicing)
+        if start_line is not None or end_line is not None:
+            lines = decoded_content.splitlines()
+            
+            # Adjust 1-based start_line to 0-based index
+            start_index = (start_line - 1) if (start_line and start_line > 0) else 0
+            
+            # end_line is inclusive for humans, so we slice up to it
+            end_index = end_line if end_line else len(lines)
+            
+            # Slice and rejoin
+            decoded_content = "\n".join(lines[start_index:end_index])
+
         return {
             "path": file_path,
-            "content": content_data.decode('utf-8'),
+            "content": decoded_content,
             "encoding": "utf-8",
             "commit_hash": commit.hexsha,
-            "size_bytes": blob.size
+            "size_bytes": len(decoded_content.encode('utf-8')) # Return size of trimmed content
         }
     except (GitCommandError, KeyError, AttributeError) as e:
         print(f"Error getting file content: {e}")
@@ -64,7 +88,6 @@ def get_file_content_at_commit(repo_path: str, file_path: str, commit_hash: Opti
             "commit_hash": commit.hexsha,
             "size_bytes": blob.size
         }
-    # Catch ValueError if commit hash is not found (e.g. shallow clone limit)
     except ValueError as e:
         print(f"Commit not found (likely due to shallow clone): {e}")
         return None
@@ -122,16 +145,13 @@ def get_diff_for_commit(repo_path: str, commit_hash: str) -> Optional[dict]:
         repo = Repo(repo_path)
         commit = repo.commit(commit_hash)
         
-        # --- LOGIC FIX: Handle initial commit ---
         if not commit.parents:
-            # Compare against the special empty tree so we see all files as "added"
             parent = NULL_TREE 
             parent_hash = "0000000000000000000000000000000000000000"
         else:
             parent = commit.parents[0]
             parent_hash = parent.hexsha
             
-        # Use create_patch=True to ensure we can parse diff text for stats
         diffs = commit.diff(parent, create_patch=True)
         
         changes = []
@@ -139,9 +159,7 @@ def get_diff_for_commit(repo_path: str, commit_hash: str) -> Optional[dict]:
             lines_added = 0
             lines_deleted = 0
             
-            # Manually parse the diff text for accurate stats
             if d.diff:
-                # GitPython returns diff as bytes
                 diff_text = d.diff.decode('utf-8', errors='replace')
                 for line in diff_text.splitlines():
                     if line.startswith('+') and not line.startswith('+++'):
@@ -166,7 +184,82 @@ def get_diff_for_commit(repo_path: str, commit_hash: str) -> Optional[dict]:
             "parent_hash": parent_hash,
             "changes": changes
         }
-    # FIX: Catch ValueError for missing commits (shallow clone issue)
     except (GitCommandError, KeyError, AttributeError, ValueError) as e:
         print(f"Error getting commit diff: {e}")
         return None
+
+def generate_repo_map(repo_path: str, commit_hash: Optional[str] = None) -> Optional[dict]:
+    """
+    Generates a high-level map of the repository (classes, functions) using Regex.
+    """
+    try:
+        repo = Repo(repo_path)
+        if commit_hash is None:
+            commit = repo.head.commit
+        else:
+            commit = repo.commit(commit_hash)
+            
+        repo_map = []
+        
+        # Walk through the entire tree
+        for blob in commit.tree.traverse():
+            if blob.type != 'blob':
+                continue
+                
+            # Only analyze code files (basic heuristic)
+            if not blob.path.endswith(('.py', '.js', '.ts', '.java', '.cpp', '.cs')):
+                continue
+            
+            # Limit: Skip massive files to avoid timeout
+            if blob.size > 100_000: 
+                continue
+
+            try:
+                content = blob.data_stream.read().decode('utf-8')
+                definitions = _extract_definitions(content, blob.path)
+                
+                if definitions:
+                    repo_map.append(RepoMapItem(
+                        file_path=blob.path,
+                        definitions=definitions
+                    ))
+            except UnicodeDecodeError:
+                continue # Skip binary or non-utf8 files
+                
+        return {
+            "commit_hash": commit.hexsha,
+            "map": repo_map
+        }
+    except (GitCommandError, ValueError) as e:
+        print(f"Error generating repo map: {e}")
+        return None
+
+def _extract_definitions(content: str, file_path: str) -> List[str]:
+    """
+    Extracts class and function definitions using Regex.
+    This is a simple heuristic, not a full AST parser.
+    """
+    defs = []
+    
+    # Python Patterns
+    if file_path.endswith('.py'):
+        # Match 'class MyClass:' or 'def my_func('
+        matches = re.findall(r'^\s*(class\s+\w+|def\s+\w+)', content, re.MULTILINE)
+        defs.extend(matches)
+        
+    # JS/TS Patterns
+    elif file_path.endswith(('.js', '.ts', '.jsx', '.tsx')):
+        # Match 'function myFunc', 'class MyClass', 'const myFunc = () =>'
+        matches = re.findall(r'^\s*(function\s+\w+|class\s+\w+|const\s+\w+\s*=\s*(\(.*?\)|.*?)\s*=>)', content, re.MULTILINE)
+        # Clean up JS arrow functions for cleaner output
+        clean_matches = []
+        for m in matches:
+            if isinstance(m, tuple):
+                m = m[0] # Take full match
+            if '=>' in m:
+                # simplify 'const foo = () =>' to 'const foo'
+                m = m.split('=')[0].strip()
+            clean_matches.append(m)
+        defs.extend(clean_matches)
+        
+    return defs

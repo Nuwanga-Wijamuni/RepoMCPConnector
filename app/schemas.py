@@ -43,6 +43,9 @@ class FileContentRequest(BaseModel):
 
 class PublicFileContentRequest(FileContentRequest):
     repo_url: str = Field(..., description="The public HTTPS URL of the Git repository.")
+    # New fields for Smart Context Trimming
+    start_line: Optional[int] = Field(None, description="Start reading from this line number (1-based).")
+    end_line: Optional[int] = Field(None, description="Stop reading at this line number (inclusive).")
 
 class FileContentResponse(BaseModel):
     path: str
@@ -94,8 +97,16 @@ class CommitDiffResponse(BaseModel):
     parent_hash: str
     changes: List[DiffStats]
 
-# --- (Phase 1) /get_authorship ---
-# ... (To be implemented) ...
+# --- Tool: /get_repo_map ---
 
-# --- (Phase 3) /find_bug_introducing_commit ---
-# ... (To be implemented) ...
+class RepoMapRequest(BaseModel):
+    repo_url: str = Field(..., description="The public HTTPS URL of the Git repository.")
+    commit_hash: Optional[str] = Field(None, description="Specific commit hash. Defaults to HEAD.")
+
+class RepoMapItem(BaseModel):
+    file_path: str
+    definitions: List[str] # e.g. "class User", "def get_user()"
+
+class RepoMapResponse(BaseModel):
+    commit_hash: str
+    map: List[RepoMapItem]

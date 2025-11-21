@@ -29,8 +29,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Git-Aware Semantic DevOps Server",
     description="A 'Generation 2' MCP server that provides structured, semantic answers about any public Git repository.",
-    version="0.3.1",
-    lifespan=lifespan  # Register the lifespan context manager
+    version="0.3.2",
+    lifespan=lifespan
 )
 
 # --- Core Public Endpoints ---
@@ -40,14 +40,10 @@ app = FastAPI(
           summary="Get file tree structure",
           description="Returns the full directory structure (files and folders) for the repository. Useful for mapping the project.",
           tags=["Repository Analysis"],
-          # Limit to 10 requests per minute per IP
           dependencies=[Depends(RateLimiter(times=10, seconds=60))])
 async def api_get_public_tree(request: schemas.PublicTreeRequest):
     try:
-        # 1. Clone/Fetch Repo
         repo_path = repo_manager.get_repo(request.repo_url)
-        
-        # 2. Validate Sub-path (if provided)
         relative_path = None
         if request.path and request.path != "/":
             safe_path = validation.validate_safe_path(repo_path, request.path)
@@ -56,7 +52,6 @@ async def api_get_public_tree(request: schemas.PublicTreeRequest):
     except (ValueError, RuntimeError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # 3. Get Tree Logic
     tree_data = tools.get_tree_at_commit(repo_path, relative_path, request.commit_hash)
     
     if tree_data is None:
@@ -96,9 +91,9 @@ async def api_get_public_file_history(request: schemas.PublicFileHistoryRequest)
 @app.post("/public/get_file_content",
           response_model=schemas.FileContentResponse,
           summary="Read file content",
-          description="Returns the full text content of a file at a specific commit (or HEAD).",
+          description="Returns the full text content of a file at a specific commit (or HEAD). Supports slicing with start_line/end_line.",
           tags=["Repository Analysis"],
-          dependencies=[Depends(RateLimiter(times=20, seconds=60))]) # Higher limit for content reading
+          dependencies=[Depends(RateLimiter(times=20, seconds=60))])
 async def api_get_public_file_content(request: schemas.PublicFileContentRequest):
     try:
         repo_path = repo_manager.get_repo(request.repo_url)
@@ -107,7 +102,14 @@ async def api_get_public_file_content(request: schemas.PublicFileContentRequest)
     except (ValueError, RuntimeError) as e:
         raise HTTPException(status_code=400, detail=str(e))
         
-    content_data = tools.get_file_content_at_commit(repo_path, relative_path, request.commit_hash)
+    # Pass the new arguments (start_line, end_line) to the tool function
+    content_data = tools.get_file_content_at_commit(
+        repo_path, 
+        relative_path, 
+        request.commit_hash,
+        request.start_line, 
+        request.end_line
+    )
     
     if content_data is None:
         raise HTTPException(
@@ -137,6 +139,25 @@ async def api_get_public_commit_diff(request: schemas.PublicCommitDiffRequest):
             detail=f"Commit not found: {request.commit_hash}"
         )
     return schemas.CommitDiffResponse(**diff_data)
+
+@app.post("/public/get_repo_map",
+          response_model=schemas.RepoMapResponse,
+          summary="Get repository map",
+          description="Returns a compressed map of the codebase (classes, functions) to give the LLM high-level context.",
+          tags=["Repository Analysis"],
+          dependencies=[Depends(RateLimiter(times=5, seconds=60))]) # Heavy operation, lower limit
+async def api_get_repo_map(request: schemas.RepoMapRequest):
+    try:
+        repo_path = repo_manager.get_repo(request.repo_url)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+        
+    repo_map = tools.generate_repo_map(repo_path, request.commit_hash)
+    
+    if repo_map is None:
+        raise HTTPException(status_code=500, detail="Failed to generate repo map")
+        
+    return schemas.RepoMapResponse(**repo_map)
 
 
 @app.get("/", summary="Server Health Check", tags=["Health"])
