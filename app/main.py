@@ -19,6 +19,10 @@ app = FastAPI(
           description="Returns the full directory structure (files and folders) for the repository. Useful for mapping the project.",
           tags=["Repository Analysis"])
 async def api_get_public_tree(request: schemas.PublicTreeRequest):
+    """
+    Input: repo_url, path (optional), commit_hash (optional)
+    Output: JSON tree structure
+    """
     try:
         # 1. Clone/Fetch Repo
         repo_path = repo_manager.get_repo(request.repo_url)
@@ -49,6 +53,10 @@ async def api_get_public_tree(request: schemas.PublicTreeRequest):
           description="Returns a list of commits that modified a specific file. Includes author, date, and message.",
           tags=["Repository Analysis"])
 async def api_get_public_file_history(request: schemas.PublicFileHistoryRequest):
+    """
+    Input: repo_url, path
+    Output: List of commits for that file
+    """
     try:
         repo_path = repo_manager.get_repo(request.repo_url)
         safe_path = validation.validate_safe_path(repo_path, request.path)
@@ -74,6 +82,10 @@ async def api_get_public_file_history(request: schemas.PublicFileHistoryRequest)
           description="Returns the full text content of a file at a specific commit (or HEAD).",
           tags=["Repository Analysis"])
 async def api_get_public_file_content(request: schemas.PublicFileContentRequest):
+    """
+    Input: repo_url, path, commit_hash (optional)
+    Output: File content string
+    """
     try:
         repo_path = repo_manager.get_repo(request.repo_url)
         safe_path = validation.validate_safe_path(repo_path, request.path)
@@ -97,6 +109,10 @@ async def api_get_public_file_content(request: schemas.PublicFileContentRequest)
           description="Returns a structured summary of changes (lines added/removed, files modified) for a specific commit hash.",
           tags=["Repository Analysis"])
 async def api_get_public_commit_diff(request: schemas.PublicCommitDiffRequest):
+    """
+    Input: repo_url, commit_hash
+    Output: Structured diff stats
+    """
     try:
         repo_path = repo_manager.get_repo(request.repo_url)
     except (ValueError, RuntimeError) as e:
