@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict # <--- Corrected import
 import os
 
 class Settings(BaseSettings):
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
 
     # This line tells pydantic to load from a file named ".env"
     # and to not fail if it sees extra variables.
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore") # <--- Corrected usage
 
 # Create a single, global instance of the settings.
 # Other files in our app (like main.py) will import this
