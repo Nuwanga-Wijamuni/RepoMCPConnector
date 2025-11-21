@@ -64,6 +64,10 @@ def get_file_content_at_commit(repo_path: str, file_path: str, commit_hash: Opti
             "commit_hash": commit.hexsha,
             "size_bytes": blob.size
         }
+    # Catch ValueError if commit hash is not found (e.g. shallow clone limit)
+    except ValueError as e:
+        print(f"Commit not found (likely due to shallow clone): {e}")
+        return None
 
 def get_tree_at_commit(repo_path: str, path: Optional[str] = None, commit_hash: Optional[str] = None) -> Optional[dict]:
     """
@@ -105,6 +109,9 @@ def get_tree_at_commit(repo_path: str, path: Optional[str] = None, commit_hash: 
         }
     except (GitCommandError, KeyError, AttributeError) as e:
         print(f"Error getting tree structure: {e}")
+        return None
+    except ValueError as e:
+        print(f"Commit not found (likely due to shallow clone): {e}")
         return None
 
 def get_diff_for_commit(repo_path: str, commit_hash: str) -> Optional[dict]:
@@ -159,6 +166,7 @@ def get_diff_for_commit(repo_path: str, commit_hash: str) -> Optional[dict]:
             "parent_hash": parent_hash,
             "changes": changes
         }
-    except (GitCommandError, KeyError, AttributeError) as e:
+    # FIX: Catch ValueError for missing commits (shallow clone issue)
+    except (GitCommandError, KeyError, AttributeError, ValueError) as e:
         print(f"Error getting commit diff: {e}")
         return None
