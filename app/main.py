@@ -1,14 +1,36 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
+from contextlib import asynccontextmanager
+import redis.asyncio as redis
+from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
+
 from . import schemas
 from .core.config import settings
 from .security import validation
 from .git_logic import tools, repo_manager
 import os
 
+# Define startup/shutdown logic to connect to Redis for Rate Limiting
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Connect to Redis using the URL from config
+    try:
+        redis_connection = redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+        await FastAPILimiter.init(redis_connection)
+        yield
+    except Exception as e:
+        print(f"Warning: Redis connection for rate limiting failed: {e}")
+        yield
+    finally:
+        # Cleanup logic if needed
+        if 'redis_connection' in locals():
+            await redis_connection.close()
+
 app = FastAPI(
     title="Git-Aware Semantic DevOps Server",
     description="A 'Generation 2' MCP server that provides structured, semantic answers about any public Git repository.",
-    version="0.3.0"
+    version="0.3.1",
+    lifespan=lifespan  # Register the lifespan context manager
 )
 
 # --- Core Public Endpoints ---
@@ -17,12 +39,10 @@ app = FastAPI(
           response_model=schemas.TreeResponse,
           summary="Get file tree structure",
           description="Returns the full directory structure (files and folders) for the repository. Useful for mapping the project.",
-          tags=["Repository Analysis"])
+          tags=["Repository Analysis"],
+          # Limit to 10 requests per minute per IP
+          dependencies=[Depends(RateLimiter(times=10, seconds=60))])
 async def api_get_public_tree(request: schemas.PublicTreeRequest):
-    """
-    Input: repo_url, path (optional), commit_hash (optional)
-    Output: JSON tree structure
-    """
     try:
         # 1. Clone/Fetch Repo
         repo_path = repo_manager.get_repo(request.repo_url)
@@ -51,12 +71,9 @@ async def api_get_public_tree(request: schemas.PublicTreeRequest):
           response_model=schemas.FileHistoryResponse,
           summary="Get commit history for a file",
           description="Returns a list of commits that modified a specific file. Includes author, date, and message.",
-          tags=["Repository Analysis"])
+          tags=["Repository Analysis"],
+          dependencies=[Depends(RateLimiter(times=10, seconds=60))])
 async def api_get_public_file_history(request: schemas.PublicFileHistoryRequest):
-    """
-    Input: repo_url, path
-    Output: List of commits for that file
-    """
     try:
         repo_path = repo_manager.get_repo(request.repo_url)
         safe_path = validation.validate_safe_path(repo_path, request.path)
@@ -80,12 +97,9 @@ async def api_get_public_file_history(request: schemas.PublicFileHistoryRequest)
           response_model=schemas.FileContentResponse,
           summary="Read file content",
           description="Returns the full text content of a file at a specific commit (or HEAD).",
-          tags=["Repository Analysis"])
+          tags=["Repository Analysis"],
+          dependencies=[Depends(RateLimiter(times=20, seconds=60))]) # Higher limit for content reading
 async def api_get_public_file_content(request: schemas.PublicFileContentRequest):
-    """
-    Input: repo_url, path, commit_hash (optional)
-    Output: File content string
-    """
     try:
         repo_path = repo_manager.get_repo(request.repo_url)
         safe_path = validation.validate_safe_path(repo_path, request.path)
@@ -107,12 +121,9 @@ async def api_get_public_file_content(request: schemas.PublicFileContentRequest)
           response_model=schemas.CommitDiffResponse,
           summary="Get commit changes (Diff)",
           description="Returns a structured summary of changes (lines added/removed, files modified) for a specific commit hash.",
-          tags=["Repository Analysis"])
+          tags=["Repository Analysis"],
+          dependencies=[Depends(RateLimiter(times=10, seconds=60))])
 async def api_get_public_commit_diff(request: schemas.PublicCommitDiffRequest):
-    """
-    Input: repo_url, commit_hash
-    Output: Structured diff stats
-    """
     try:
         repo_path = repo_manager.get_repo(request.repo_url)
     except (ValueError, RuntimeError) as e:
@@ -130,7 +141,4 @@ async def api_get_public_commit_diff(request: schemas.PublicCommitDiffRequest):
 
 @app.get("/", summary="Server Health Check", tags=["Health"])
 def read_root():
-    """
-    A simple health check endpoint to confirm the server is running.
-    """
     return {"status": "ok", "message": "Git-Aware Semantic DevOps Server is running."}
