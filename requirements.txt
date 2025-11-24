@@ -7,6 +7,7 @@ pydantic-settings
 gitpython
 python-dotenv
 fastapi-limiter
+fastapi-cache2[redis]
 #(Phase 3) Async Tasks & Sandboxing
 
 celery
